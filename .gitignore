@@ -1,0 +1,62 @@
+# OS / editor
+.DS_Store
+*.swp
+.history/
+.idea/
+*.iml
+.vscode/
+.vs/
+*.user
+
+# Secrets
+.env
+*.env
+
+# Agent / editor local state
+.claude/
+
+# Upstream's App Store review fixtures. They carried live IDS and APNs private
+# keys, the handles registered to that account, and a real Mac's serial and
+# MAC address, and include_str! baked them into every binary. Removed from the
+# tree; ignored so a stray copy cannot come back.
+hw_testing.plist
+id_testing.plist
+
+# CMake / build
+build/
+out/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+*.cmake.cache
+install_manifest.txt
+
+# Visual Studio / MSVC
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.obj
+*.aps
+*.tlog
+.vs/
+Debug/
+Release/
+x64/
+
+# Rust / Cargo
+target/
+**/target/
+Cargo.lock.bak
+
+# Python scratch (protoc helpers, etc.)
+__pycache__/
+*.pyc
+
+# Generated C++ headers from cxx (lives under cargo target/)
+# already excluded by target/
+
+# Private test data
+/rust/src/api/hw_testing.plist
+/rust/src/api/id_testing.plist

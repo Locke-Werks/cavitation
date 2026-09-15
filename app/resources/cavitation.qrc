@@ -1,0 +1,36 @@
+<RCC>
+    <qresource prefix="/icons">
+        <file alias="cavitation.ico">../../assets/cavitation.ico</file>
+    </qresource>
+    <qresource prefix="/fonts">
+        <file>fonts/ChakraPetch-Regular.ttf</file>
+        <file>fonts/ChakraPetch-Medium.ttf</file>
+        <file>fonts/ChakraPetch-SemiBold.ttf</file>
+        <file>fonts/ChakraPetch-Bold.ttf</file>
+        <file>fonts/Outfit-VariableFont.ttf</file>
+    </qresource>
+    <qresource prefix="/qml">
+        <file alias="Theme.qml">../qml/Theme.qml</file>
+        <file alias="Main.qml">../qml/Main.qml</file>
+        <file alias="TitleBar.qml">../qml/TitleBar.qml</file>
+        <file alias="Sidebar.qml">../qml/Sidebar.qml</file>
+        <file alias="ChatRow.qml">../qml/ChatRow.qml</file>
+        <file alias="ConversationPane.qml">../qml/ConversationPane.qml</file>
+        <file alias="MessageLine.qml">../qml/MessageLine.qml</file>
+        <file alias="Composer.qml">../qml/Composer.qml</file>
+        <file alias="ToastLayer.qml">../qml/ToastLayer.qml</file>
+        <file alias="CavButton.qml">../qml/CavButton.qml</file>
+        <file alias="CavTextField.qml">../qml/CavTextField.qml</file>
+        <file alias="CavScrollBar.qml">../qml/CavScrollBar.qml</file>
+        <file alias="CavDialog.qml">../qml/CavDialog.qml</file>
+        <file alias="CavMenu.qml">../qml/CavMenu.qml</file>
+        <file alias="CavMenuItem.qml">../qml/CavMenuItem.qml</file>
+        <file alias="CavSeparator.qml">../qml/CavSeparator.qml</file>
+        <file alias="CavCaptionButton.qml">../qml/CavCaptionButton.qml</file>
+        <file alias="SetupDialog.qml">../qml/SetupDialog.qml</file>
+        <file alias="SettingsDialog.qml">../qml/SettingsDialog.qml</file>
+        <file alias="AboutDialog.qml">../qml/AboutDialog.qml</file>
+        <file alias="NewChatDialog.qml">../qml/NewChatDialog.qml</file>
+        <file alias="FaceTimeDialog.qml">../qml/FaceTimeDialog.qml</file>
+    </qresource>
+</RCC>

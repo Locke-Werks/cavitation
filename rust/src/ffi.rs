@@ -1,0 +1,695 @@
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use anyhow::{anyhow, Result};
+use uuid::Uuid;
+
+use crate::app::AppState;
+use crate::events::Event;
+use crate::integration::{self, AuthState};
+use crate::session::{self, AuthSession};
+use crate::storage::{AttachmentRow, ChatRow, MessageRow};
+
+#[cxx::bridge(namespace = "whatbubbles")]
+mod bridge {
+    struct ChatSummary {
+        guid: String,
+        title: String,
+        subtitle: String,
+        participant_summary: String,
+        // "iMessage", "RCS" or "SMS". A string rather than a bool because
+        // there are three transports, not two.
+        service: String,
+        is_group: bool,
+        is_pinned: bool,
+        is_archived: bool,
+        pin_order: i32,
+        unread_count: i32,
+        last_message_date: i64,
+    }
+
+    struct MessageView {
+        guid: String,
+        chat_guid: String,
+        sender_address: String,
+        sender_display_name: String,
+        text: String,
+        subject: String,
+        is_from_me: bool,
+        date: i64,
+        date_read: i64,
+        date_edited: i64,
+        is_unsent: bool,
+        has_attachments: bool,
+        thread_origin_guid: String,
+    }
+
+    struct HandleInfo {
+        id: i64,
+        address: String,
+        service: String,
+        display_name: String,
+    }
+
+    struct AttachmentInfo {
+        guid: String,
+        message_guid: String,
+        filename: String,
+        mime_type: String,
+        size_bytes: i64,
+        local_path: String,
+        transfer_state: i32,
+    }
+
+    struct EventDto {
+        kind: String,
+        text: String,
+        chat_guid: String,
+        message_guid: String,
+        flag: bool,
+    }
+
+    extern "Rust" {
+        type AppState;
+
+        fn core_version() -> String;
+        fn core_greeting(name: &str) -> String;
+        fn default_data_dir() -> String;
+        fn init_logger_at(path: &str) -> Result<()>;
+
+        fn init_app(data_dir: &str) -> Result<Box<AppState>>;
+
+        fn data_dir(app: &AppState) -> String;
+        fn auth_state(app: &AppState) -> String;
+        fn relay_host(app: &AppState) -> String;
+        fn set_relay_host(app: &AppState, host: &str) -> Result<()>;
+        fn has_os_config(app: &AppState) -> bool;
+        fn os_config_summary(app: &AppState) -> String;
+        fn list_chats(app: &AppState, include_archived: bool) -> Vec<ChatSummary>;
+        fn list_messages(app: &AppState, chat_guid: &str, limit: i64) -> Vec<MessageView>;
+        fn list_handles(app: &AppState) -> Vec<HandleInfo>;
+        fn list_attachments(app: &AppState, message_guid: &str) -> Vec<AttachmentInfo>;
+
+        fn send_message_local(app: &AppState, chat_guid: &str, text: &str) -> Result<String>;
+        fn attach_file_local(app: &AppState, chat_guid: &str, text: &str, source_path: &str) -> Result<String>;
+        fn mark_chat_read(app: &AppState, chat_guid: &str) -> Result<()>;
+        fn pin_chat(app: &AppState, chat_guid: &str, pinned: bool, order: i32) -> Result<()>;
+        fn archive_chat(app: &AppState, chat_guid: &str, archived: bool) -> Result<()>;
+        fn tapback_local(app: &AppState, message_guid: &str, reaction: &str) -> Result<()>;
+        fn edit_message_local(app: &AppState, message_guid: &str, new_text: &str) -> Result<()>;
+        fn unsend_message_local(app: &AppState, message_guid: &str) -> Result<()>;
+
+        fn start_apple_id_auth(app: &AppState, apple_id: &str, password: &str) -> Result<()>;
+        fn submit_two_factor_code(app: &AppState, code: &str) -> Result<()>;
+        fn complete_pairing(app: &AppState, code: &str, beeper_token: &str) -> Result<()>;
+        fn clear_pairing(app: &AppState) -> Result<()>;
+        fn start_facetime_call(app: &AppState, address: &str) -> Result<String>;
+
+        fn poll_events(app: &AppState) -> Vec<EventDto>;
+    }
+}
+
+fn core_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+fn core_greeting(name: &str) -> String {
+    format!("cavitation core says hi, {name}")
+}
+
+fn default_data_dir() -> String {
+    if let Some(proj) = directories::ProjectDirs::from("", "Locke Werks", "Cavitation") {
+        proj.data_dir().to_string_lossy().into_owned()
+    } else if let Ok(home) = std::env::var("USERPROFILE") {
+        format!("{home}\\AppData\\Roaming\\Locke Werks\\Cavitation")
+    } else {
+        ".".into()
+    }
+}
+
+fn init_logger_at(path: &str) -> Result<()> {
+    let p = PathBuf::from(path);
+    std::fs::create_dir_all(&p)?;
+    crate::init_logger(&p);
+    Ok(())
+}
+
+fn init_app(data_dir: &str) -> Result<Box<AppState>> {
+    let path = PathBuf::from(data_dir);
+    let app = AppState::open(&path)?;
+    Ok(Box::new(app))
+}
+
+fn data_dir(app: &AppState) -> String {
+    app.data_dir.to_string_lossy().into_owned()
+}
+
+fn auth_state(app: &AppState) -> String {
+    app.auth_label()
+}
+
+fn relay_host(app: &AppState) -> String {
+    app.relay_host()
+}
+
+fn set_relay_host(app: &AppState, host: &str) -> Result<()> {
+    let trimmed = host.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("relay host cannot be empty"));
+    }
+    app.set_relay_host(trimmed.to_string())
+}
+
+fn has_os_config(app: &AppState) -> bool {
+    app.has_os_config()
+}
+
+fn os_config_summary(app: &AppState) -> String {
+    let guard = app.os_config.lock();
+    match guard.as_ref() {
+        None => "none".to_string(),
+        Some(cfg) => format!(
+            "host={} code={}… udid={} proto={}",
+            cfg.host,
+            cfg.code.chars().take(8).collect::<String>(),
+            cfg.udid.as_deref().unwrap_or(""),
+            cfg.protocol_version
+        ),
+    }
+}
+
+fn list_chats(app: &AppState, include_archived: bool) -> Vec<bridge::ChatSummary> {
+    let storage = app.storage.lock();
+    let rows = match storage.list_chats(include_archived) {
+        Ok(r) => r,
+        Err(e) => {
+            app.events.send(Event::Error(format!("list_chats: {e}")));
+            return vec![];
+        }
+    };
+    rows.into_iter()
+        .map(|mut row: ChatRow| {
+            let participants = storage.participants_summary(&row.guid).unwrap_or_default();
+            row.participant_summary = participants.clone();
+            let title = if row.title.is_empty() {
+                participants.clone()
+            } else {
+                row.title.clone()
+            };
+            bridge::ChatSummary {
+                guid: row.guid,
+                title,
+                subtitle: row.last_message_preview,
+                participant_summary: row.participant_summary,
+                service: row.service,
+                is_group: row.is_group,
+                is_pinned: row.is_pinned,
+                is_archived: row.is_archived,
+                pin_order: row.pin_order,
+                unread_count: row.unread_count,
+                last_message_date: row.last_message_date,
+            }
+        })
+        .collect()
+}
+
+fn list_messages(app: &AppState, chat_guid: &str, limit: i64) -> Vec<bridge::MessageView> {
+    match app.storage.lock().messages_for_chat(chat_guid, limit.max(1)) {
+        Ok(rows) => rows.into_iter().map(message_row_to_view).collect(),
+        Err(e) => {
+            app.events.send(Event::Error(format!("list_messages: {e}")));
+            vec![]
+        }
+    }
+}
+
+fn list_attachments(app: &AppState, message_guid: &str) -> Vec<bridge::AttachmentInfo> {
+    match app.storage.lock().attachments_for_message(message_guid) {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|a: AttachmentRow| bridge::AttachmentInfo {
+                guid: a.guid,
+                message_guid: a.message_guid,
+                filename: a.filename,
+                mime_type: a.mime_type,
+                size_bytes: a.size_bytes,
+                local_path: a.local_path,
+                transfer_state: a.transfer_state,
+            })
+            .collect(),
+        Err(e) => {
+            app.events.send(Event::Error(format!("list_attachments: {e}")));
+            vec![]
+        }
+    }
+}
+
+fn mime_from_ext(name: &str) -> &'static str {
+    let lower = name.to_ascii_lowercase();
+    match lower.rsplit_once('.').map(|(_, e)| e).unwrap_or("") {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "heic" => "image/heic",
+        "mp4" | "m4v" => "video/mp4",
+        "mov" => "video/quicktime",
+        "webm" => "video/webm",
+        "mp3" => "audio/mpeg",
+        "m4a" => "audio/mp4",
+        "wav" => "audio/wav",
+        "pdf" => "application/pdf",
+        "txt" => "text/plain",
+        _ => "application/octet-stream",
+    }
+}
+
+fn list_handles(app: &AppState) -> Vec<bridge::HandleInfo> {
+    match app.storage.lock().list_handles() {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|h| bridge::HandleInfo {
+                id: h.id,
+                address: h.address,
+                service: h.service,
+                display_name: h.display_name,
+            })
+            .collect(),
+        Err(e) => {
+            app.events.send(Event::Error(format!("list_handles: {e}")));
+            vec![]
+        }
+    }
+}
+
+fn message_row_to_view(m: MessageRow) -> bridge::MessageView {
+    bridge::MessageView {
+        guid: m.guid,
+        chat_guid: m.chat_guid,
+        sender_address: m.sender_address,
+        sender_display_name: m.sender_display_name,
+        text: m.text,
+        subject: m.subject,
+        is_from_me: m.is_from_me,
+        date: m.date,
+        date_read: m.date_read,
+        date_edited: m.date_edited,
+        is_unsent: m.is_unsent,
+        has_attachments: m.has_attachments,
+        thread_origin_guid: m.thread_origin_guid,
+    }
+}
+
+fn now_epoch() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn attach_file_local(
+    app: &AppState,
+    chat_guid: &str,
+    text: &str,
+    source_path: &str,
+) -> Result<String> {
+    let src = Path::new(source_path);
+    if !src.exists() {
+        return Err(anyhow!("file not found: {source_path}"));
+    }
+    let metadata = std::fs::metadata(src)?;
+    let size_bytes = metadata.len() as i64;
+    let filename = src
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| anyhow!("unreadable filename"))?
+        .to_string();
+    let mime = mime_from_ext(&filename).to_string();
+
+    let att_guid = format!("attach-{}", Uuid::new_v4());
+    let dest_dir = app.data_dir.join("attachments").join(&att_guid);
+    std::fs::create_dir_all(&dest_dir)?;
+    let dest = dest_dir.join(&filename);
+    std::fs::copy(src, &dest)?;
+    let dest_str = dest.to_string_lossy().into_owned();
+
+    let msg_guid = format!("temp-{}", Uuid::new_v4());
+    let row = MessageRow {
+        guid: msg_guid.clone(),
+        chat_guid: chat_guid.to_string(),
+        handle_id: None,
+        sender_address: String::new(),
+        sender_display_name: String::new(),
+        text: text.to_string(),
+        subject: String::new(),
+        is_from_me: true,
+        date: now_epoch(),
+        date_read: 0,
+        date_edited: 0,
+        is_unsent: false,
+        has_attachments: true,
+        thread_origin_guid: String::new(),
+    };
+    {
+        let storage = app.storage.lock();
+        storage.insert_message(&row)?;
+        storage.insert_attachment(&att_guid, &msg_guid, &filename, &mime, size_bytes, &dest_str)?;
+    }
+
+    app.events.send(Event::MessageSent {
+        chat_guid: chat_guid.to_string(),
+        message_guid: msg_guid.clone(),
+    });
+
+    let cg = chat_guid.to_string();
+    let mg = msg_guid.clone();
+    let text_s = text.to_string();
+    let path_s = dest_str.clone();
+    let mime_s = mime.to_string();
+    let bus = app.events.clone();
+    let participants = app.storage.lock().participant_addresses(chat_guid)?;
+    let session = app.session.lock().clone();
+
+    app.runtime_handle.spawn(async move {
+        let Some(session) = session else {
+            bus.send(Event::MessageFailed {
+                chat_guid: cg,
+                tentative_guid: mg,
+                reason: "not signed in".into(),
+            });
+            return;
+        };
+        if let Err(e) = integration::send_imessage_with_attachments(
+            &cg,
+            &participants,
+            &text_s,
+            &[path_s],
+            &[mime_s],
+            &session,
+        )
+        .await
+        {
+            bus.send(Event::MessageFailed {
+                chat_guid: cg,
+                tentative_guid: mg,
+                reason: e.to_string(),
+            });
+        }
+    });
+
+    Ok(msg_guid)
+}
+
+fn send_message_local(app: &AppState, chat_guid: &str, text: &str) -> Result<String> {
+    let guid = format!("temp-{}", Uuid::new_v4());
+    let row = MessageRow {
+        guid: guid.clone(),
+        chat_guid: chat_guid.to_string(),
+        handle_id: None,
+        sender_address: String::new(),
+        sender_display_name: String::new(),
+        text: text.to_string(),
+        subject: String::new(),
+        is_from_me: true,
+        date: now_epoch(),
+        date_read: 0,
+        date_edited: 0,
+        is_unsent: false,
+        has_attachments: false,
+        thread_origin_guid: String::new(),
+    };
+    app.storage.lock().insert_message(&row)?;
+    app.events.send(Event::MessageSent {
+        chat_guid: chat_guid.to_string(),
+        message_guid: guid.clone(),
+    });
+
+    let chat_g = chat_guid.to_string();
+    let text_s = text.to_string();
+    let tentative = guid.clone();
+    let bus = app.events.clone();
+    let participants = app.storage.lock().participant_addresses(chat_guid)?;
+    let session = app.session.lock().clone();
+
+    app.runtime_handle.spawn(async move {
+        let Some(session) = session else {
+            bus.send(Event::MessageFailed {
+                chat_guid: chat_g,
+                tentative_guid: tentative,
+                reason: "not signed in".into(),
+            });
+            return;
+        };
+        if let Err(e) =
+            integration::send_imessage(&chat_g, &participants, &text_s, &session).await
+        {
+            bus.send(Event::MessageFailed {
+                chat_guid: chat_g,
+                tentative_guid: tentative,
+                reason: e.to_string(),
+            });
+        }
+    });
+
+    Ok(guid)
+}
+
+fn mark_chat_read(app: &AppState, chat_guid: &str) -> Result<()> {
+    app.storage.lock().mark_chat_read(chat_guid)?;
+    app.events.send(Event::ChatUpdated {
+        chat_guid: chat_guid.to_string(),
+    });
+    Ok(())
+}
+
+fn pin_chat(app: &AppState, chat_guid: &str, pinned: bool, order: i32) -> Result<()> {
+    app.storage.lock().set_chat_pin(chat_guid, pinned, order)?;
+    app.events.send(Event::ChatUpdated {
+        chat_guid: chat_guid.to_string(),
+    });
+    Ok(())
+}
+
+fn archive_chat(app: &AppState, chat_guid: &str, archived: bool) -> Result<()> {
+    app.storage.lock().set_chat_archived(chat_guid, archived)?;
+    app.events.send(Event::ChatUpdated {
+        chat_guid: chat_guid.to_string(),
+    });
+    Ok(())
+}
+
+fn tapback_local(app: &AppState, message_guid: &str, reaction: &str) -> Result<()> {
+    app.storage
+        .lock()
+        .add_reaction(message_guid, None, true, reaction)?;
+    let msg = message_guid.to_string();
+    let rx = reaction.to_string();
+    let bus = app.events.clone();
+    app.runtime_handle.spawn(async move {
+        if let Err(e) = integration::send_tapback(&msg, &rx).await {
+            bus.send(Event::Warn(format!("tapback stub: {e}")));
+        }
+    });
+    Ok(())
+}
+
+fn edit_message_local(app: &AppState, message_guid: &str, new_text: &str) -> Result<()> {
+    app.storage.lock().edit_message(message_guid, new_text)?;
+    let msg = message_guid.to_string();
+    let txt = new_text.to_string();
+    let bus = app.events.clone();
+    app.runtime_handle.spawn(async move {
+        if let Err(e) = integration::send_edit(&msg, &txt).await {
+            bus.send(Event::Warn(format!("edit stub: {e}")));
+        }
+    });
+    Ok(())
+}
+
+fn unsend_message_local(app: &AppState, message_guid: &str) -> Result<()> {
+    app.storage.lock().unsend_message(message_guid)?;
+    let msg = message_guid.to_string();
+    let bus = app.events.clone();
+    app.runtime_handle.spawn(async move {
+        if let Err(e) = integration::send_unsend(&msg).await {
+            bus.send(Event::Warn(format!("unsend stub: {e}")));
+        }
+    });
+    Ok(())
+}
+
+fn ensure_session(app: &AppState) -> Result<Arc<AuthSession>> {
+    if let Some(s) = app.session.lock().as_ref().cloned() {
+        return Ok(s);
+    }
+    let cfg = app
+        .os_config
+        .lock()
+        .as_ref()
+        .cloned()
+        .ok_or_else(|| anyhow!("no OSConfig yet — complete relay pairing first"))?;
+    let data_dir = app.data_dir.clone();
+    let session = crate::RUNTIME
+        .block_on(session::create_session(&data_dir, &cfg))?;
+    let arc = Arc::new(session);
+    *app.session.lock() = Some(arc.clone());
+    Ok(arc)
+}
+
+async fn apply_login_state(
+    session: &Arc<AuthSession>,
+    state: rustpush::LoginState,
+    storage: &Arc<parking_lot::Mutex<crate::storage::Storage>>,
+    events: &crate::events::EventBus,
+) -> AuthState {
+    match state {
+        rustpush::LoginState::LoggedIn => {
+            if let Err(e) = session::finalize_login_and_register_ids(session).await {
+                return AuthState::Errored(format!("ids registration: {e}"));
+            }
+            match session::prepare_im_client(session).await {
+                Ok(_) => {
+                    // Nothing pumps APS until this runs, so without it the
+                    // client can send and will never receive.
+                    tokio::spawn(crate::receive::run(
+                        session.clone(),
+                        storage.clone(),
+                        events.clone(),
+                    ));
+                    AuthState::Ready
+                }
+                Err(e) => AuthState::Errored(format!("imclient: {e}")),
+            }
+        }
+        other => AuthState::from_login_state(&other),
+    }
+}
+
+fn persist_auth_label(app_auth: &parking_lot::Mutex<AuthState>,
+                      storage: &parking_lot::Mutex<crate::storage::Storage>,
+                      events: &crate::events::EventBus,
+                      new_state: AuthState) {
+    let label = new_state.label();
+    *app_auth.lock() = new_state;
+    let _ = storage.lock().kv_set("auth.state", &label);
+    events.send(Event::AuthStateChanged { state: label });
+}
+
+fn start_apple_id_auth(app: &AppState, apple_id: &str, password: &str) -> Result<()> {
+    if apple_id.is_empty() || password.is_empty() {
+        return Err(anyhow!("apple_id and password are required"));
+    }
+    let session = ensure_session(app)?;
+    app.set_auth(AuthState::AuthenticatingAccount);
+
+    let apple = apple_id.to_string();
+    let pw = password.to_string();
+    let bus = app.events.clone();
+    let auth_slot = app.auth.clone();
+    let storage = app.storage.clone();
+    app.runtime_handle.spawn(async move {
+        let new_state = match integration::authenticate_apple_id(&session, &apple, &pw).await {
+            Ok(ls) => apply_login_state(&session, ls, &storage, &bus).await,
+            Err(e) => AuthState::Errored(e.to_string()),
+        };
+        persist_auth_label(&auth_slot, &storage, &bus, new_state);
+    });
+    Ok(())
+}
+
+fn submit_two_factor_code(app: &AppState, code: &str) -> Result<()> {
+    let session = app
+        .session
+        .lock()
+        .as_ref()
+        .cloned()
+        .ok_or_else(|| anyhow!("no active auth session — start sign-in first"))?;
+
+    let c = code.to_string();
+    let bus = app.events.clone();
+    let auth_slot = app.auth.clone();
+    let storage = app.storage.clone();
+    app.runtime_handle.spawn(async move {
+        let new_state = match integration::submit_2fa_code(&session, &c).await {
+            Ok(ls) => apply_login_state(&session, ls, &storage, &bus).await,
+            Err(e) => AuthState::Errored(e.to_string()),
+        };
+        persist_auth_label(&auth_slot, &storage, &bus, new_state);
+    });
+    Ok(())
+}
+
+fn complete_pairing(app: &AppState, code: &str, beeper_token: &str) -> Result<()> {
+    if code.trim().is_empty() {
+        return Err(anyhow!("pairing code is required"));
+    }
+    let host = app.relay_host();
+    let code_s = code.trim().to_string();
+    let token = if beeper_token.trim().is_empty() {
+        None
+    } else {
+        Some(beeper_token.trim().to_string())
+    };
+
+    let config = crate::RUNTIME
+        .block_on(crate::os_config::fetch_relay_config(&host, &code_s, token))?;
+    app.persist_os_config(config)?;
+    app.set_auth(AuthState::NeedsCredentials);
+    app.events
+        .send(Event::Info("paired with relay; enter Apple ID next".into()));
+    Ok(())
+}
+
+fn clear_pairing(app: &AppState) -> Result<()> {
+    app.clear_os_config()?;
+    app.set_auth(AuthState::NeedsHardwarePairing);
+    app.events.send(Event::Info("cleared relay pairing".into()));
+    Ok(())
+}
+
+fn start_facetime_call(_app: &AppState, address: &str) -> Result<String> {
+    let a = address.to_string();
+    crate::RUNTIME.block_on(async { integration::start_facetime(&a).await })
+}
+
+fn poll_events(app: &AppState) -> Vec<bridge::EventDto> {
+    app.events
+        .drain()
+        .into_iter()
+        .map(event_to_dto)
+        .collect()
+}
+
+fn event_to_dto(ev: Event) -> bridge::EventDto {
+    match ev {
+        Event::Info(t) => dto("info", t, "", "", false),
+        Event::Warn(t) => dto("warn", t, "", "", false),
+        Event::Error(t) => dto("error", t, "", "", false),
+        Event::ChatCreated { chat_guid } => dto("chat_created", String::new(), &chat_guid, "", false),
+        Event::ChatUpdated { chat_guid } => dto("chat_updated", String::new(), &chat_guid, "", false),
+        Event::MessageArrived { chat_guid, message_guid } => {
+            dto("message_arrived", String::new(), &chat_guid, &message_guid, false)
+        }
+        Event::MessageSent { chat_guid, message_guid } => {
+            dto("message_sent", String::new(), &chat_guid, &message_guid, false)
+        }
+        Event::MessageFailed { chat_guid, tentative_guid, reason } => {
+            dto("message_failed", reason, &chat_guid, &tentative_guid, false)
+        }
+        Event::AuthStateChanged { state } => dto("auth_state", state, "", "", false),
+        Event::TypingStatusChanged { chat_guid, is_typing } => {
+            dto("typing", String::new(), &chat_guid, "", is_typing)
+        }
+    }
+}
+
+fn dto(kind: &str, text: String, chat_guid: &str, message_guid: &str, flag: bool) -> bridge::EventDto {
+    bridge::EventDto {
+        kind: kind.to_string(),
+        text,
+        chat_guid: chat_guid.to_string(),
+        message_guid: message_guid.to_string(),
+        flag,
+    }
+}
+

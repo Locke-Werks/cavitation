@@ -1,0 +1,41 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+    "configurePresets": [
+        {
+            "name": "win-vs",
+            "displayName": "Windows / Visual Studio 2022 (x64)",
+            "generator": "Visual Studio 17 2022",
+            "architecture": { "value": "x64" },
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_PREFIX_PATH": "C:/Qt/6.8.3/msvc2022_64",
+                "Rust_COMPILER": "$env{USERPROFILE}/.rustup/toolchains/stable-x86_64-pc-windows-msvc/bin/rustc.exe",
+                "Rust_RESOLVE_RUSTUP_TOOLCHAINS": "OFF"
+            },
+            "environment": {
+                "PATH": "C:/Strawberry/perl/bin;C:/Strawberry/c/bin;$penv{LOCALAPPDATA}/Microsoft/WinGet/Packages/Google.Protobuf_Microsoft.Winget.Source_8wekyb3d8bbwe/bin;$penv{PATH}"
+            }
+        },
+        {
+            "name": "win-ninja",
+            "displayName": "Windows / Ninja (run from a VS Developer Command Prompt)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build-ninja",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_PREFIX_PATH": "C:/Qt/6.8.3/msvc2022_64",
+                "Rust_COMPILER": "$env{USERPROFILE}/.rustup/toolchains/stable-x86_64-pc-windows-msvc/bin/rustc.exe",
+                "Rust_RESOLVE_RUSTUP_TOOLCHAINS": "OFF"
+            },
+            "environment": {
+                "PATH": "C:/Strawberry/perl/bin;C:/Strawberry/c/bin;$penv{LOCALAPPDATA}/Microsoft/WinGet/Packages/Google.Protobuf_Microsoft.Winget.Source_8wekyb3d8bbwe/bin;$penv{PATH}"
+            }
+        }
+    ],
+    "buildPresets": [
+        { "name": "win-vs-release", "configurePreset": "win-vs", "configuration": "Release" },
+        { "name": "win-vs-debug",   "configurePreset": "win-vs", "configuration": "Debug" },
+        { "name": "win-ninja",      "configurePreset": "win-ninja" }
+    ]
+}

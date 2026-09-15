@@ -1,0 +1,35 @@
+Cavitation
+Copyright (c) Locke Werks and the Cavitation contributors.
+
+This product is a fork of, and is based on, OpenBubbles
+(https://github.com/OpenBubbles/openbubbles-app), which is itself
+based on BlueBubbles (https://github.com/BlueBubblesApp/bluebubbles-app).
+
+Substantial portions of the source code originate from:
+
+  * BlueBubbles, Copyright (c) the BlueBubbles contributors.
+    Founded and principally authored by Zach Shames, with contributions
+    from Tanay Neotia, Joel Jothiprakasam, Brandon, Elliot Nash,
+    Josh Levin, Sean Regan, Adison Trueblood, Terry Brett,
+    Christopher Lang, Jake Block, Matthew Stadter, Travis Gibson,
+    Anthony Michelizzi, Cameron Aaron, Keegan Lillo, Keyvan Fatehi
+    and others.
+
+  * OpenBubbles and rustpush, Copyright (c) the OpenBubbles
+    contributors. Principally authored by Tae Hagen. The iMessage
+    protocol implementation, including IDS registration, APNs
+    transport, identity handling and FaceTime support, is that work.
+
+This work is distributed under the terms of the Apache License,
+Version 2.0 (the "License"); see the LICENSE file for the full
+license text. You may not use this work except in compliance with
+the License.
+
+Modifications have been made by the Cavitation contributors. Where
+required by Section 4(b) of the License, files that have been modified
+carry notices to that effect.
+
+The names "BlueBubbles" and "OpenBubbles" are used in this project
+only to describe the origin of the work, as permitted by Section 6
+of the Apache License, Version 2.0. Cavitation is not endorsed by,
+affiliated with, or sponsored by either upstream project, or by Apple.
