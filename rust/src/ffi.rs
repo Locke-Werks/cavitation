@@ -524,7 +524,7 @@ fn ensure_session(app: &AppState) -> Result<Arc<AuthSession>> {
         .ok_or_else(|| anyhow!("no device identity yet — complete pairing first"))?;
     let data_dir = app.data_dir.clone();
     let session = crate::RUNTIME
-        .block_on(session::create_session(&data_dir, cfg.as_os_config()))?;
+        .block_on(session::create_session(&data_dir, cfg.as_os_config()?))?;
     let arc = Arc::new(session);
     *app.session.lock() = Some(arc.clone());
     Ok(arc)

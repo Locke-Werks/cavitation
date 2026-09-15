@@ -25,10 +25,23 @@ impl AppState {
     pub fn open(data_dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(data_dir)
             .with_context(|| format!("creating data dir at {}", data_dir.display()))?;
+
+        // Must happen before anything can reach the keychain. Sign-in does,
+        // immediately, and the keystore panics rather than erroring if it has
+        // not been initialised.
+        crate::keychain::init(data_dir)?;
         let storage = Storage::open(&data_dir.join("cavitation.db"))?;
 
-        let os_config_loaded = os_config::load(&os_config::config_path(data_dir))
-            .unwrap_or(None);
+        // Not unwrap_or(None): swallowing this turned an unreadable identity
+        // into a silent "not paired", which looked like the pairing had simply
+        // not been saved.
+        let os_config_loaded = match os_config::load(&os_config::config_path(data_dir)) {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!("stored device identity unreadable, treating as unpaired: {e}");
+                None
+            }
+        };
 
         let relay_host = storage
             .kv_get("relay.host")?

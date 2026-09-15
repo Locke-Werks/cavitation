@@ -37,29 +37,37 @@ fn generate_udid() -> String {
 }
 
 /// Either way of describing this device to Apple.
+///
+/// The local variant deliberately stores the activation code rather than the
+/// decoded MacOSConfig. HardwareConfig's binary fields carry serde helpers
+/// written for plist, and their visitor rejects the number arrays serde_json
+/// produces, so a decoded config writes to JSON cleanly and then fails to load
+/// back. The code is a short base64 string that survives the round trip, and
+/// decoding it again costs a 410-byte protobuf parse.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DeviceConfig {
     /// Hardware identity carried in the code. No broker.
-    Local(Box<MacOSConfig>),
+    Local { code: String, label: String },
     /// Hardware identity held by a broker, fetched per registration.
     Relay(Box<RelayConfig>),
 }
 
 impl DeviceConfig {
-    pub fn as_os_config(&self) -> Arc<dyn OSConfig> {
+    pub fn as_os_config(&self) -> Result<Arc<dyn OSConfig>> {
         match self {
-            DeviceConfig::Local(c) => Arc::new((**c).clone()),
-            DeviceConfig::Relay(c) => Arc::new((**c).clone()),
+            DeviceConfig::Local { code, .. } => {
+                let parsed = parse_local_code(code)?
+                    .ok_or_else(|| anyhow!("stored activation code is no longer readable"))?;
+                Ok(Arc::new(parsed))
+            }
+            DeviceConfig::Relay(c) => Ok(Arc::new((**c).clone())),
         }
     }
 
     pub fn summary(&self) -> String {
         match self {
-            DeviceConfig::Local(c) => format!(
-                "local {} ({}) build {}",
-                c.inner.product_name, c.version, c.inner.os_build_num
-            ),
+            DeviceConfig::Local { label, .. } => label.clone(),
             DeviceConfig::Relay(c) => format!(
                 "relay {} code={}… udid={} proto={}",
                 c.host,
@@ -71,8 +79,15 @@ impl DeviceConfig {
     }
 
     pub fn is_local(&self) -> bool {
-        matches!(self, DeviceConfig::Local(_))
+        matches!(self, DeviceConfig::Local { .. })
     }
+}
+
+fn describe(cfg: &MacOSConfig) -> String {
+    format!(
+        "local {} ({}) build {}",
+        cfg.inner.product_name, cfg.version, cfg.inner.os_build_num
+    )
 }
 
 /// Decodes a self-contained activation code, or returns None if this is not
@@ -144,7 +159,10 @@ pub async fn pair(
     beeper_token: Option<String>,
 ) -> Result<DeviceConfig> {
     if let Some(local) = parse_local_code(code)? {
-        return Ok(DeviceConfig::Local(Box::new(local)));
+        return Ok(DeviceConfig::Local {
+            label: describe(&local),
+            code: code.trim().to_string(),
+        });
     }
 
     let versions = RelayConfig::get_versions(host, code, &beeper_token)

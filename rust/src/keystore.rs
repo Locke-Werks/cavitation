@@ -583,3 +583,4 @@ impl Keystore for NativeKeystoreHolder {
         self.keystore.decrypt(alias.to_owned(), ciphertext.to_vec(), *mode).map_err(|e| e.into())
     }
 }
+

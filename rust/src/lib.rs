@@ -43,6 +43,7 @@ pub fn init_logger(path: &Path) {
 
 pub mod app;
 pub mod events;
+pub mod keychain;
 pub mod ffi;
 pub mod integration;
 pub mod os_config;
