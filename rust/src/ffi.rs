@@ -168,13 +168,7 @@ fn os_config_summary(app: &AppState) -> String {
     let guard = app.os_config.lock();
     match guard.as_ref() {
         None => "none".to_string(),
-        Some(cfg) => format!(
-            "host={} code={}… udid={} proto={}",
-            cfg.host,
-            cfg.code.chars().take(8).collect::<String>(),
-            cfg.udid.as_deref().unwrap_or(""),
-            cfg.protocol_version
-        ),
+        Some(cfg) => cfg.summary(),
     }
 }
 
@@ -527,10 +521,10 @@ fn ensure_session(app: &AppState) -> Result<Arc<AuthSession>> {
         .lock()
         .as_ref()
         .cloned()
-        .ok_or_else(|| anyhow!("no OSConfig yet — complete relay pairing first"))?;
+        .ok_or_else(|| anyhow!("no device identity yet — complete pairing first"))?;
     let data_dir = app.data_dir.clone();
     let session = crate::RUNTIME
-        .block_on(session::create_session(&data_dir, &cfg))?;
+        .block_on(session::create_session(&data_dir, cfg.as_os_config()))?;
     let arc = Arc::new(session);
     *app.session.lock() = Some(arc.clone());
     Ok(arc)
@@ -632,11 +626,17 @@ fn complete_pairing(app: &AppState, code: &str, beeper_token: &str) -> Result<()
     };
 
     let config = crate::RUNTIME
-        .block_on(crate::os_config::fetch_relay_config(&host, &code_s, token))?;
+        .block_on(crate::os_config::pair(&host, &code_s, token))?;
+    let local = config.is_local();
     app.persist_os_config(config)?;
     app.set_auth(AuthState::NeedsCredentials);
-    app.events
-        .send(Event::Info("paired with relay; enter Apple ID next".into()));
+    app.events.send(Event::Info(
+        if local {
+            "paired from the code itself, no relay involved; enter Apple ID next".into()
+        } else {
+            "paired through the relay; enter Apple ID next".to_string()
+        },
+    ));
     Ok(())
 }
 

@@ -6,7 +6,7 @@ use parking_lot::Mutex;
 use rustpush::{
     APSConnection, APSConnectionResource, APSState, AppleAccount, ArcAnisetteClient,
     DefaultAnisetteProvider, IDSNGMIdentity, IDSUser, IMClient, LoginDelegate, LoginState,
-    MADRID_SERVICE, OSConfig, PersistAccountData, RelayConfig, authenticate_apple, default_provider,
+    MADRID_SERVICE, OSConfig, PersistAccountData, authenticate_apple, default_provider,
     facetime::{FACETIME_SERVICE, VIDEO_SERVICE}, findmy::MULTIPLEX_SERVICE,
     login_apple_delegates, register,
 };
@@ -15,7 +15,7 @@ use tokio::sync::Mutex as AsyncMutex;
 
 pub struct AuthSession {
     pub data_dir: PathBuf,
-    pub config: Arc<RelayConfig>,
+    pub config: Arc<dyn OSConfig>,
     pub identity: Arc<IDSNGMIdentity>,
     pub conn: APSConnection,
     pub anisette: ArcAnisetteClient<DefaultAnisetteProvider>,
@@ -42,11 +42,11 @@ fn save_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
     Ok(())
 }
 
-pub async fn create_session(data_dir: &Path, config: &RelayConfig) -> Result<AuthSession> {
+pub async fn create_session(data_dir: &Path, config: Arc<dyn OSConfig>) -> Result<AuthSession> {
     std::fs::create_dir_all(data_dir)?;
     std::fs::create_dir_all(anisette_dir(data_dir))?;
 
-    let config_arc: Arc<RelayConfig> = Arc::new(config.clone());
+    let config_arc: Arc<dyn OSConfig> = config;
     let os_config: Arc<dyn OSConfig> = config_arc.clone();
 
     let saved_aps: Option<APSState> = load_json(&aps_state_path(data_dir)).unwrap_or(None);
@@ -161,7 +161,7 @@ pub async fn finalize_login_and_register_ids(session: &AuthSession) -> Result<ID
     {
         let mut account = session.account.lock().await;
         account
-            .update_postdata("WhatBubbles", None, &["icloud", "imessage", "facetime"])
+            .update_postdata("Cavitation", None, &["icloud", "imessage", "facetime"])
             .await
             .map_err(|e| anyhow!("update_postdata: {e:?}"))?;
         if account.get_pet().is_none() {

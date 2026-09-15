@@ -3,11 +3,10 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use parking_lot::Mutex;
-use rustpush::RelayConfig;
 
 use crate::events::{Event, EventBus};
 use crate::integration::AuthState;
-use crate::os_config;
+use crate::os_config::{self, DeviceConfig};
 use crate::session::AuthSession;
 use crate::storage::Storage;
 
@@ -17,7 +16,7 @@ pub struct AppState {
     pub events: EventBus,
     pub runtime_handle: tokio::runtime::Handle,
     pub auth: Arc<Mutex<AuthState>>,
-    pub os_config: Arc<Mutex<Option<RelayConfig>>>,
+    pub os_config: Arc<Mutex<Option<DeviceConfig>>>,
     pub relay_host: Arc<Mutex<String>>,
     pub session: Arc<Mutex<Option<Arc<AuthSession>>>>,
 }
@@ -89,7 +88,7 @@ impl AppState {
         self.relay_host.lock().clone()
     }
 
-    pub fn persist_os_config(&self, cfg: RelayConfig) -> Result<()> {
+    pub fn persist_os_config(&self, cfg: DeviceConfig) -> Result<()> {
         let path = os_config::config_path(&self.data_dir);
         os_config::save(&path, &cfg)?;
         *self.os_config.lock() = Some(cfg);

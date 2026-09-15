@@ -87,8 +87,11 @@ CavDialog {
             }
 
             Text {
-                text: "Paste a relay pairing code from the OpenBubbles setup flow on a paired Mac. " +
-                      "The relay is asked for hardware info and the result is persisted as os_config.json."
+                text: "Paste an activation code from Mac Hardware Info on a Mac. If it was " +
+                      "generated with \"prevent sharing\" off, the code carries the hardware " +
+                      "identity itself and pairing happens entirely locally: the relay host " +
+                      "below is ignored and nothing is sent to it. Otherwise the code is a " +
+                      "reference and that host is asked to resolve it."
                 color: Theme.fg4
                 font.family: Theme.fontBody
                 font.pixelSize: 11
